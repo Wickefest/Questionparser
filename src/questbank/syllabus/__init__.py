@@ -2,6 +2,7 @@
 
 from questbank.syllabus.classify_mcq import classify_question, classify_records
 from questbank.syllabus.parse_syllabus_pdf import (
+    SyllabusOutcomeItem,
     SyllabusSubtopic,
     SyllabusTaxonomy,
     SyllabusTopic,
@@ -10,6 +11,7 @@ from questbank.syllabus.parse_syllabus_pdf import (
 )
 
 __all__ = [
+    "SyllabusOutcomeItem",
     "SyllabusSubtopic",
     "SyllabusTaxonomy",
     "SyllabusTopic",

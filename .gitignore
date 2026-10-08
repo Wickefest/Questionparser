@@ -8,3 +8,11 @@ dist/
 build/
 .env
 .env.local
+node_modules/
+web/dist/
+.mcp-servers/
+secrets/
+gcp-oauth.keys.json
+.gdrive-server-credentials.json
+**/credentials.json
+

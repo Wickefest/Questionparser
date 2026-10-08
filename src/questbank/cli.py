@@ -49,7 +49,7 @@ def serve_main(argv: list[str] | None = None) -> int:
     load_questbank_env()
     parser = argparse.ArgumentParser(description="Serve FastAPI MCQ ingest API")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=8001)
     args = parser.parse_args(argv)
     import uvicorn
 
@@ -151,7 +151,12 @@ def _build_ingest_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--push-supabase",
         action="store_true",
-        help="After parsing/validation, upsert DRAFT/NEEDS_REVIEW records to Supabase",
+        help="Legacy: upsert into question_banks/questions (not Question Factory)",
+    )
+    ingest.add_argument(
+        "--persist-factory",
+        action="store_true",
+        help="Persist canonical output into Prisma Question Factory draft tables",
     )
     ingest.add_argument(
         "--allow-partial-match",
@@ -188,6 +193,27 @@ def _run_ingest(args: argparse.Namespace) -> int:
         paper_code=args.paper_code,
         paper_type="mcq",
     )
+
+    factory_store = None
+    factory_uploader = None
+    if args.persist_factory:
+        import os
+
+        from questbank.factory.local_storage import create_asset_uploader
+        from questbank.factory.store import InMemoryFactoryStore, PostgresFactoryStore
+
+        dsn = (os.environ.get("DATABASE_URL") or "").strip()
+        if dsn:
+            factory_store = PostgresFactoryStore(dsn=dsn)
+        else:
+            print(
+                "WARNING: DATABASE_URL is not set — --persist-factory will write to an "
+                "in-memory store that is discarded when this process exits, NOT Supabase.",
+                file=sys.stderr,
+            )
+            factory_store = InMemoryFactoryStore()
+        factory_uploader = create_asset_uploader()
+
     manifest = run_mcq_ingest(
         question_pdf=question_pdf,
         answer_pdf=answer_pdf,
@@ -201,6 +227,9 @@ def _run_ingest(args: argparse.Namespace) -> int:
         ocr=args.ocr,
         dpi=args.dpi,
         push_supabase=args.push_supabase,
+        persist_factory=args.persist_factory,
+        factory_store=factory_store,
+        factory_uploader=factory_uploader,
         require_full_answer_match=not args.allow_partial_match,
     )
     print(json.dumps(manifest.model_dump(by_alias=True), indent=2))

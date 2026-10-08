@@ -20,6 +20,7 @@ class StructuredPart(BaseModel):
     prompt: str
     marks: int | None = None
     children: list[StructuredPart] = Field(default_factory=list)
+    visuals: list[dict] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 

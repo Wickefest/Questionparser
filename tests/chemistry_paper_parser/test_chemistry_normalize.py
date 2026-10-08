@@ -31,10 +31,19 @@ def test_ionic_charges_are_superscript_not_subscript():
     assert normalize_formula_token("VO2+") == "VO₂⁺"
     assert normalize_formula_token("Fe2+") == "Fe²⁺"
     assert normalize_formula_token("NH4+") == "NH₄⁺"
+    assert normalize_formula_token("Cr2O7^2-") == "Cr₂O₇²⁻"
+    assert normalize_formula_token("SO4^2-") == "SO₄²⁻"
+    assert normalize_formula_token("Fe^2+") == "Fe²⁺"
+    assert normalize_formula_token("Fe2+") == "Fe²⁺"
     # Already-mangled OCR/LLM forms should be repaired.
     assert "V³⁺" in normalize_chemistry_text("B V₃+")
     assert "VO₂⁺" in normalize_chemistry_text("C VO₂+")
     assert "NH₄VO₃" in normalize_chemistry_text("A NH4VO3")
+    assert normalize_chemistry_text("Cr2O7^2-") == "Cr₂O₇²⁻"
+    assert normalize_chemistry_text(r"Cr_2O_7^{2-}") == "Cr₂O₇²⁻"
+    assert normalize_chemistry_text(r"Cr_2O_7\^{2-}") == "Cr₂O₇²⁻"
+    assert normalize_chemistry_text("Fe^2+ is oxidised") == "Fe²⁺ is oxidised"
+    assert normalize_chemistry_text(r"Fe^{2+} is oxidised") == "Fe²⁺ is oxidised"
 
 
 def test_latex_chemistry_to_unicode():

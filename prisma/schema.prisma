@@ -1,0 +1,394 @@
+// EduNets Question Factory + trusted Question Bank + Syllabus Classification.
+// Prisma owns application tables, enums, relations, indexes, and constraints.
+// Supabase Auth, RLS, Storage policies, and auth.users FKs are configured separately.
+//
+// Audit UUID scalars (uploadedBy, reviewerId, approvedBy, reviewedBy) are not
+// relations. Do not add User / Profile models here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Syllabus
+// ---------------------------------------------------------------------------
+
+model Syllabus {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subject   String
+  code      String
+  year      Int
+  title     String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  nodes   SyllabusNode[]
+  batches IngestionBatch[]
+
+  @@unique([code, year])
+  @@map("syllabuses")
+}
+
+model SyllabusNode {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  syllabusId   String           @map("syllabus_id") @db.Uuid
+  parentId     String?          @map("parent_id") @db.Uuid
+  code         String?
+  title        String
+  outcomesText String?          @map("outcomes_text")
+  nodeType     SyllabusNodeType @map("node_type")
+  sortOrder    Int?             @map("sort_order")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  syllabus        Syllabus                 @relation(fields: [syllabusId], references: [id], onDelete: Cascade)
+  parent          SyllabusNode?            @relation("SyllabusNodeHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children        SyllabusNode[]           @relation("SyllabusNodeHierarchy")
+  classifications QuestionClassification[]
+  drafts          QuestionDraft[]
+
+  @@unique([syllabusId, code])
+  @@index([syllabusId])
+  @@index([parentId])
+  @@map("syllabus_nodes")
+}
+
+enum SyllabusNodeType {
+  SECTION
+  TOPIC
+  SUBTOPIC
+  OUTCOME
+
+  @@map("syllabus_node_type")
+}
+
+// ---------------------------------------------------------------------------
+// Ingestion
+// ---------------------------------------------------------------------------
+
+model IngestionBatch {
+  id         String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title      String
+  subject    String
+  examYear   Int?                 @map("exam_year")
+  paperCode  String?              @map("paper_code")
+  syllabusId String?              @map("syllabus_id") @db.Uuid
+  uploadedBy String?              @map("uploaded_by") @db.Uuid
+  status     IngestionBatchStatus
+  createdAt  DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  syllabus  Syllabus?        @relation(fields: [syllabusId], references: [id], onDelete: SetNull)
+  documents SourceDocument[]
+  runs      IngestionRun[]
+
+  @@index([syllabusId])
+  @@index([status])
+  @@map("ingestion_batches")
+}
+
+enum IngestionBatchStatus {
+  UPLOADED
+  PROCESSING
+  READY_FOR_REVIEW
+  HAS_ERRORS
+  COMPLETED
+
+  @@map("ingestion_batch_status")
+}
+
+model SourceDocument {
+  id           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId      String             @map("batch_id") @db.Uuid
+  documentType SourceDocumentType @map("document_type")
+  storagePath  String             @map("storage_path")
+  originalName String             @map("original_name")
+  mimeType     String             @map("mime_type")
+  pageCount    Int?               @map("page_count")
+  sha256       String?
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz
+
+  batch  IngestionBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  assets QuestionAsset[]
+
+  @@index([batchId])
+  @@map("source_documents")
+}
+
+enum SourceDocumentType {
+  QUESTION_PAPER
+  ANSWER_SCHEME
+
+  @@map("source_document_type")
+}
+
+model IngestionRun {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId       String             @map("batch_id") @db.Uuid
+  parserVersion String?            @map("parser_version")
+  modelName     String?            @map("model_name")
+  status        IngestionRunStatus
+  startedAt     DateTime           @default(now()) @map("started_at") @db.Timestamptz
+  completedAt   DateTime?          @map("completed_at") @db.Timestamptz
+
+  batch          IngestionBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  questionDrafts QuestionDraft[]
+  answerRecords  AnswerRecord[]
+
+  @@index([batchId])
+  @@index([status])
+  @@map("ingestion_runs")
+}
+
+enum IngestionRunStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+
+  @@map("ingestion_run_status")
+}
+
+// ---------------------------------------------------------------------------
+// Question Factory (untrusted / editable)
+// ---------------------------------------------------------------------------
+
+model QuestionDraft {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId            String       @map("run_id") @db.Uuid
+  batchId          String       @map("batch_id") @db.Uuid
+  questionRef      String       @map("question_ref")
+  questionType     QuestionType @map("question_type")
+  content          Json
+  options          Json
+  sourcePage       Int?         @map("source_page")
+  sourceRegions    Json?        @map("source_regions")
+  status           DraftStatus
+  requiresReview   Boolean      @default(false) @map("requires_review")
+  validationIssues Json?        @map("validation_issues")
+  topicNodeId      String?      @map("topic_node_id") @db.Uuid
+  bloomLevel       String?      @map("bloom_level")
+  bloomReasoning   String?      @map("bloom_reasoning")
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  run       IngestionRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  topicNode SyllabusNode? @relation(fields: [topicNodeId], references: [id], onDelete: SetNull)
+  assets    QuestionAsset[]
+  reviews   ReviewEvent[]
+
+  @@unique([runId, questionRef])
+  @@index([runId])
+  @@index([batchId])
+  @@index([status])
+  @@map("question_drafts")
+}
+
+enum QuestionType {
+  MCQ
+  STRUCTURED
+
+  @@map("question_type")
+}
+
+enum DraftStatus {
+  DRAFT
+  NEEDS_REVIEW
+  READY
+  REJECTED
+  APPROVED
+
+  @@map("draft_status")
+}
+
+model AnswerRecord {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId             String             @map("run_id") @db.Uuid
+  batchId           String             @map("batch_id") @db.Uuid
+  questionRef       String             @map("question_ref")
+  answerValue       String?            @map("answer_value")
+  partsAnswer       Json?              @map("parts_answer")
+  explanation       String?
+  explanationSource ExplanationSource? @map("explanation_source")
+  sourcePage        Int?               @map("source_page")
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
+
+  run IngestionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, questionRef])
+  @@index([runId])
+  @@index([batchId])
+  @@index([questionRef])
+  @@map("answer_records")
+}
+
+enum ExplanationSource {
+  MARK_SCHEME
+  AI
+
+  @@map("explanation_source")
+}
+
+model QuestionAsset {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  draftId          String?   @map("draft_id") @db.Uuid
+  sourceDocumentId String?   @map("source_document_id") @db.Uuid
+  role             AssetRole
+  storagePath      String    @map("storage_path")
+  mimeType         String    @map("mime_type")
+  sourcePage       Int?      @map("source_page")
+  bbox             Json?
+  width            Int?
+  height           Int?
+  sha256           String?
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  draft          QuestionDraft?  @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  sourceDocument SourceDocument? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([draftId])
+  @@index([sourceDocumentId])
+  @@index([role])
+  @@map("question_assets")
+}
+
+enum AssetRole {
+  STEM_DIAGRAM
+  STEM_GRAPH
+  STEM_IMAGE
+  COMPOSITE_OPTIONS
+  TABLE_FALLBACK
+  SOURCE_CROP
+
+  @@map("asset_role")
+}
+
+model ReviewEvent {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  draftId    String       @map("draft_id") @db.Uuid
+  reviewerId String?      @map("reviewer_id") @db.Uuid
+  action     ReviewAction
+  comment    String?
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  draft QuestionDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@index([draftId])
+  @@index([reviewerId])
+  @@map("review_events")
+}
+
+enum ReviewAction {
+  EDIT
+  APPROVE
+  REJECT
+  REQUEST_REPARSE
+
+  @@map("review_action")
+}
+
+// ---------------------------------------------------------------------------
+// Trusted Question Bank
+// ---------------------------------------------------------------------------
+
+/// Stable production identity. Provenance is `sourceKey`; UUID is row identity.
+/// Immutable question bodies live on QuestionVersion, not here.
+///
+/// Physical table is `bank_questions` (not `questions`) to avoid colliding with
+/// the legacy ingest table written by `push_canonical_bank` / `push_mcq_bank`.
+model Question {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceKey String   @unique @map("source_key")
+  subject   String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  versions QuestionVersion[]
+
+  @@index([subject])
+  @@map("bank_questions")
+}
+
+/// Immutable approved snapshot. Never update content/options in place;
+/// create a new version instead.
+model QuestionVersion {
+  id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  questionId    String                @map("question_id") @db.Uuid
+  version       Int
+  content       Json
+  options       Json
+  sourceDraftId String?               @map("source_draft_id") @db.Uuid
+  status        QuestionVersionStatus
+  approvedBy    String?               @map("approved_by") @db.Uuid
+  approvedAt    DateTime?             @map("approved_at") @db.Timestamptz
+  publishedAt   DateTime?             @map("published_at") @db.Timestamptz
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  bloomLevel    String?               @map("bloom_level")
+  bloomReasoning String?              @map("bloom_reasoning")
+
+  question        Question                 @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answer          QuestionAnswer?
+  classifications QuestionClassification[]
+
+  @@unique([questionId, version])
+  @@index([questionId])
+  @@index([status])
+  @@map("question_versions")
+}
+
+enum QuestionVersionStatus {
+  APPROVED
+  PUBLISHED
+  RETIRED
+
+  @@map("question_version_status")
+}
+
+model QuestionAnswer {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  questionVersionId String             @unique @map("question_version_id") @db.Uuid
+  value             String?
+  partsAnswer       Json?              @map("parts_answer")
+  explanation       String?
+  explanationSource ExplanationSource? @map("explanation_source")
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
+
+  questionVersion QuestionVersion @relation(fields: [questionVersionId], references: [id], onDelete: Cascade)
+
+  @@map("question_answers")
+}
+
+model QuestionClassification {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  questionVersionId String               @map("question_version_id") @db.Uuid
+  syllabusNodeId    String               @map("syllabus_node_id") @db.Uuid
+  isPrimary         Boolean              @default(true) @map("is_primary")
+  status            ClassificationStatus
+  classifiedBy      String?              @map("classified_by")
+  reviewedBy        String?              @map("reviewed_by") @db.Uuid
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  questionVersion QuestionVersion @relation(fields: [questionVersionId], references: [id], onDelete: Cascade)
+  syllabusNode    SyllabusNode    @relation(fields: [syllabusNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([questionVersionId, syllabusNodeId])
+  @@index([questionVersionId])
+  @@index([syllabusNodeId])
+  @@index([status])
+  @@map("question_classifications")
+}
+
+enum ClassificationStatus {
+  PENDING
+  CLASSIFIED
+  NEEDS_REVIEW
+  APPROVED
+
+  @@map("classification_status")
+}

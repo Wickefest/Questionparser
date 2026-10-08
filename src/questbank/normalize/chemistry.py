@@ -14,11 +14,13 @@ _FORMULA = re.compile(
     r"(?:"
     r"[A-Z][a-z]?(?:\s*\d+)+(?:[A-Z][a-z]?(?:\s*\d+)*)*"
     r"|[A-Z][a-z]?(?:[A-Z][a-z]?\d*)+"
-    r"|[A-Z][a-z]?\d*[+-]"  # single-element ions (V3+, H+, Cl-)
+    # Single-element ions: Fe2+, Fe^2+, H+, Cl-
+    r"|[A-Z][a-z]?(?:\^(?:\d+[+-]?|[+-])|\d*[+-])"
     r")"
     r"(?:\.(?:\d+)?(?:H\s*2\s*O|H₂O))?"
     r"(?:\s*\(\s*[IVX]+\s*\))?"
-    r"(?:\d*[+-])?"  # ionic charge glued to formula (not "H2 + Cl2" reaction plus)
+    # Multi-element trailing charge: Cr2O7^2- / VO2+
+    r"(?:\^(?:\d+[+-]?|[+-])|\d*[+-])?"
     r")(?![A-Za-z])"
 )
 
@@ -237,10 +239,24 @@ def normalize_formula_token(raw: str) -> str:
     return "".join(rebuilt)
 
 
+_CHARGE_SUP = re.compile(r"([⁰¹²³⁴⁵⁶⁷⁸⁹]*)([⁺⁻])")
+
+
 def _flatten_script_digits(text: str) -> str:
-    """Map sub/superscript digits back to ASCII before re-applying chemistry rules."""
+    """Map sub/superscript digits back to ASCII before re-applying chemistry rules.
+
+    Already-superscripted ionic charges become caret form (Cr₂O₇²⁻ → Cr2O7^2-)
+    so stoichiometry digits are not glued into the charge (Cr2O72-).
+    """
     text = re.sub(r"</?sub>", "", text, flags=re.I)
     text = re.sub(r"</?sup>", "", text, flags=re.I)
+
+    def _caret_charge(match: re.Match[str]) -> str:
+        digits = match.group(1).translate(str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789"))
+        sign = match.group(2).translate(str.maketrans("⁺⁻", "+-"))
+        return f"^{digits}{sign}"
+
+    text = _CHARGE_SUP.sub(_caret_charge, text)
     text = text.translate(_ASCII_FROM_SUB)
     text = text.translate(str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-"))
     return text
@@ -251,6 +267,7 @@ def _apply_subscripts(text: str) -> str:
 
     Single-element ions keep charge digits as superscript (V3+ → V³⁺).
     Multi-element formulas treat mid digits as stoichiometry (VO2+ → VO₂⁺).
+    Caret charges (Cr2O7^2-) become true superscripts.
     """
     out: list[str] = []
     index = 0
@@ -271,6 +288,11 @@ def _apply_subscripts(text: str) -> str:
                     continue
                 out.append(digits.group(0).translate(_SUBSCRIPT))
                 index += digits.end()
+            continue
+        caret_charge = re.match(r"\^(\d+[+-]?|[+-])", text[index:])
+        if caret_charge and index > 0:
+            out.append(caret_charge.group(1).translate(_SUPERSCRIPT))
+            index += caret_charge.end()
             continue
         charge = re.match(r"(\d+)?[+-]", text[index:])
         if charge and index > 0:
@@ -303,6 +325,8 @@ def latex_chemistry_to_unicode(text: str) -> str:
 
     # Prompt/JSON escaping often yields V^{{3+}} / VO_2^{{+}}.
     result = text.replace("{{", "{").replace("}}", "}")
+    # Escaped carets from JSON/LLM dumps: Cr_2O_7\^{2-} → Cr_2O_7^{2-}
+    result = result.replace("\\^", "^")
     result = _LATEX_WRAP.sub("", result)
     for pattern, repl in _LATEX_COMMANDS:
         result = pattern.sub(repl, result)

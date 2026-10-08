@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp?project_ref=nmycicvkhzdpsaumyzln&features=docs%2Caccount%2Cdatabase%2Cdebugging%2Cdevelopment%2Cfunctions%2Cbranching"
+    },
+    "googleDrive": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-gdrive"],
+      "env": {
+        "GDRIVE_OAUTH_PATH": "D:/questionbank2.0/secrets/gdrive/gcp-oauth.keys.json",
+        "GDRIVE_CREDENTIALS_PATH": "D:/questionbank2.0/secrets/gdrive/credentials.json"
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "questbank",
+  "private": true,
+  "description": "EduNets Question Bank / Question Factory",
+  "scripts": {
+    "prisma:format": "prisma format",
+    "prisma:validate": "prisma validate",
+    "prisma:generate": "prisma generate"
+  },
+  "devDependencies": {
+    "prisma": "^6.15.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.15.0"
+  }
+}

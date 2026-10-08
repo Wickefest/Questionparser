@@ -29,6 +29,10 @@ dev = [
 supabase = [
   "supabase>=2.0.0",
 ]
+factory = [
+  "psycopg[binary]>=3.1.0",
+  "supabase>=2.0.0",
+]
 
 [project.scripts]
 parse-chemistry-paper-1 = "questbank.cli:main"

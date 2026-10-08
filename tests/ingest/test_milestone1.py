@@ -78,7 +78,12 @@ def test_matching_by_normalized_ref():
 def test_join_preserves_mark_scheme_explanation_only():
     questions = [_text_question("4")]
     answers = [
-        ParsedAnswer(question_ref="4", answer="D", explanation="Official mark scheme note."),
+        ParsedAnswer(
+            question_ref="4",
+            answer="D",
+            explanation="Official mark scheme note.",
+            explanation_source="mark_scheme",
+        ),
     ]
     matching = match_questions_and_answers(questions, answers)
     records = join_into_complete_records(questions, answers, matching)
@@ -87,6 +92,51 @@ def test_join_preserves_mark_scheme_explanation_only():
     assert records[0].answer.explanation == "Official mark scheme note."
     assert records[0].answer.explanation_source == "mark_scheme"
     assert records[0].classification is None
+
+
+def test_join_drops_explanation_without_mark_scheme_source():
+    questions = [_text_question("40")]
+    answers = [
+        ParsedAnswer(
+            question_ref="40",
+            answer="C",
+            explanation="Invented reactivity-series commentary.",
+            explanation_source=None,
+        ),
+    ]
+    matching = match_questions_and_answers(questions, answers)
+    records = join_into_complete_records(questions, answers, matching)
+    assert records[0].answer is not None
+    assert records[0].answer.value == "C"
+    assert records[0].answer.explanation is None
+    assert records[0].answer.explanation_source is None
+
+
+def test_sanitize_letter_only_key_strips_explanations():
+    from questbank.llm.gemini_answer import sanitize_parsed_answers
+
+    page_text = """
+    CHEMISTRY 6092/01 Answers
+    1 B  2 A  3 C  4 D  5 D  6 D  7 A  8 B  9 A  10 C
+    11 C  12 A  13 A  14 A  15 D  16 A  17 B  18 D  19 A  20 C
+    """
+    answers = [
+        ParsedAnswer(
+            question_ref="1",
+            answer="B",
+            explanation="Because statement 1 explains statement 2.",
+            explanation_source="mark_scheme",
+        ),
+        ParsedAnswer(
+            question_ref="40",
+            answer="C",
+            explanation="Magnesium is above carbon hence cannot be reduced.",
+            explanation_source="mark_scheme",
+        ),
+    ]
+    cleaned = sanitize_parsed_answers(answers, page_text=page_text)
+    assert all(a.explanation is None for a in cleaned)
+    assert all(a.explanation_source is None for a in cleaned)
 
 
 def test_join_null_explanation_when_absent():

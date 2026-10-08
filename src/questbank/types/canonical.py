@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field, model_validator
+
+from questbank.types.structured import StructuredPart
 
 OptionLabel = Literal["A", "B", "C", "D"]
 OPTION_LABELS: tuple[OptionLabel, ...] = ("A", "B", "C", "D")
@@ -76,6 +78,7 @@ class ImageBlock(BaseModel):
 class ListBlock(BaseModel):
     type: Literal["list"] = "list"
     items: list[str] = Field(default_factory=list)
+    ordered: bool = True  # numbered statement lists (1/2/3) are the common exam form
 
 
 ContentBlock = Annotated[
@@ -91,12 +94,35 @@ ContentBlock = Annotated[
 
 class TextOptionItem(BaseModel):
     label: OptionLabel
-    content: str
+    content: str | None = None
+    latex: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_latex_into_content(cls, data: Any) -> Any:
+        """Gemini often emits latex for formula options while mode=text."""
+        if isinstance(data, dict):
+            content = data.get("content")
+            latex = data.get("latex")
+            if (content is None or content == "") and isinstance(latex, str) and latex.strip():
+                data = {**data, "content": latex}
+        return data
 
 
 class MathOptionItem(BaseModel):
     label: OptionLabel
-    latex: str
+    latex: str | None = None
+    content: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_content_into_latex(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            latex = data.get("latex")
+            content = data.get("content")
+            if (latex is None or latex == "") and isinstance(content, str) and content.strip():
+                data = {**data, "latex": content}
+        return data
 
 
 class TableOptionRow(BaseModel):
@@ -141,8 +167,56 @@ class MixedOptions(BaseModel):
     bbox: list[float] | None = None
 
 
+def _coerce_question_options_payload(data: Any) -> Any:
+    """Repair common Gemini option-schema mistakes before discrimination.
+
+    Examples:
+    - mode=text with latex-only items
+    - invalid mode tags like "chemistry"
+    - mode=math with content-only items
+    """
+    if not isinstance(data, dict):
+        return data
+    mode = str(data.get("mode") or "").strip().lower()
+    items = data.get("items")
+    # Invalid / hallucinated mode tags → pick best supported mode.
+    if mode and mode not in {"text", "math", "table", "composite_visual", "mixed"}:
+        if isinstance(items, list) and any(isinstance(i, dict) and i.get("latex") for i in items):
+            mode = "math"
+        elif isinstance(items, list):
+            mode = "text"
+        else:
+            mode = "text"
+        data = {**data, "mode": mode}
+
+    if mode == "text" and isinstance(items, list):
+        healed = []
+        for item in items:
+            if not isinstance(item, dict):
+                healed.append(item)
+                continue
+            row = dict(item)
+            if (row.get("content") is None or row.get("content") == "") and row.get("latex"):
+                row["content"] = row["latex"]
+            healed.append(row)
+        data = {**data, "items": healed}
+    elif mode == "math" and isinstance(items, list):
+        healed = []
+        for item in items:
+            if not isinstance(item, dict):
+                healed.append(item)
+                continue
+            row = dict(item)
+            if (row.get("latex") is None or row.get("latex") == "") and row.get("content"):
+                row["latex"] = row["content"]
+            healed.append(row)
+        data = {**data, "items": healed}
+    return data
+
+
 QuestionOptions = Annotated[
     TextOptions | MathOptions | TableOptions | CompositeVisualOptions | MixedOptions,
+    BeforeValidator(_coerce_question_options_payload),
     Field(discriminator="mode"),
 ]
 
@@ -166,6 +240,7 @@ class ParsedAnswer(BaseModel):
     question_ref: str
     answer: OptionLabel
     explanation: str | None = None
+    explanation_source: ExplanationSource | None = None
 
 
 class AnswerPayload(BaseModel):
@@ -180,6 +255,51 @@ class CompleteQuestionRecord(BaseModel):
     content: list[ContentBlock] = Field(default_factory=list)
     options: QuestionOptions
     answer: AnswerPayload | None = None
+    classification: None = None
+    status: QuestionStatus = "DRAFT"
+    source_page: int | None = None
+    source_regions: list[SourceRegion] = Field(default_factory=list)
+    requires_review: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Structured (Paper 2/3, multi-part free-response) records — additive,
+# parallel to the MCQ family above. Does not alter ParsedQuestion /
+# CompleteQuestionRecord / ParsedAnswer, which remain "mcq"-only.
+# ---------------------------------------------------------------------------
+
+
+class StructuredAnswerPart(BaseModel):
+    """One graded part of a structured mark-scheme answer, e.g. (a)(i)."""
+
+    label: str
+    marks_max: int | None = None
+    accepted_answers: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    ecf: bool = False  # error-carried-forward permitted for this part
+    visuals: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class StructuredAnswerRecord(BaseModel):
+    question_ref: str
+    parts: list[StructuredAnswerPart] = Field(default_factory=list)
+
+
+class StructuredCompleteRecord(BaseModel):
+    """Structured-question counterpart to CompleteQuestionRecord.
+
+    Mirrors questbank.types.structured.StructuredQuestion's shape (stem,
+    parts, marks_total) rather than the MCQ options field, since a
+    structured question has no A-D options.
+    """
+
+    question_ref: str
+    question_type: Literal["structured"] = "structured"
+    stem: str = ""
+    parts: list[StructuredPart] = Field(default_factory=list)
+    content: list[ContentBlock] = Field(default_factory=list)
+    marks_total: int | None = None
+    answer: StructuredAnswerRecord | None = None
     classification: None = None
     status: QuestionStatus = "DRAFT"
     source_page: int | None = None
